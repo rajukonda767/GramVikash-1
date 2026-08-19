@@ -1,0 +1,17 @@
+{
+  "appId": "com.gramvikas.app",
+  "appName": "GramVikas",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#15803d",
+      "showSpinner": false
+    }
+  }
+}
