@@ -55,10 +55,11 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Configure CORS Middleware
+# Configure Permissive CORS Middleware for Vercel, Render & Mobile Apps
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=r"https?://.*",
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,8 +78,21 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
+# Root Endpoint for Render Health Checks
+@app.get("/", tags=["Health"])
+@app.head("/", tags=["Health"])
+async def root():
+    return {
+        "status": "online",
+        "service": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "docs": "/docs",
+        "health": "/health"
+    }
+
 # Health Check Endpoint
 @app.get("/health", tags=["Health"])
+@app.head("/health", tags=["Health"])
 async def health_check():
     return {
         "status": "healthy",
