@@ -55,14 +55,26 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Configure Permissive CORS Middleware for Vercel, Render & Mobile Apps
+# Explicitly Allow Vercel Frontend, Localhost, & Mobile Apps with 200 Preflight
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://.*",
-    allow_origins=["*"],
+    allow_origins=[
+        "https://gramvikashai.vercel.app",
+        "https://gramvikas.vercel.app",
+        "https://gramvikash-ai.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600
 )
 
 # Global Exception Handler
@@ -78,7 +90,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# Root Endpoint for Render Health Checks
+# Root Endpoint for Health & Render
 @app.get("/", tags=["Health"])
 @app.head("/", tags=["Health"])
 async def root():
