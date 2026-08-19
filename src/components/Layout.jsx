@@ -43,8 +43,8 @@ const mobileNavItems = [
   { path: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
   { path: '/crop-recommendation', icon: Wheat, labelKey: 'nav.cropRecommendation' },
   { path: '/disease-detection', icon: ScanLine, labelKey: 'nav.diseaseDetection', isCenter: true },
+  { path: '/yield-estimation', icon: TrendingUp, labelKey: 'nav.yieldEstimation' },
   { path: '/irrigation', icon: Droplets, labelKey: 'nav.irrigation' },
-  { path: '/ai-chat', icon: Bot, labelKey: 'nav.aiChat' },
 ];
 
 export default function Layout({ children }) {
