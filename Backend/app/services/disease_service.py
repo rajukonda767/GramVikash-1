@@ -41,9 +41,13 @@ class DiseaseDetectionService:
         is_valid, reason, debug_metrics = ImageValidator.validate_image_bytes(image_bytes)
         if not is_valid:
             error_messages = {
+                "selfie_detected": {
+                    "en": "Human selfie or person detected. Please upload or capture a clear photo of a plant leaf.",
+                    "te": "సెల్ఫీ లేదా వ్యక్తి ఫోటో గుర్తించబడింది. దయచేసి పంట ఆకు యొక్క స్పష్టమైన ఫోటోను తీయండి లేదా అప్‌లోడ్ చేయండి."
+                },
                 "not_a_plant": {
-                    "en": "Please upload a clear close-up photo of the crop leaf.",
-                    "te": "దయచేసి పంట ఆకుకు సంబంధించిన స్పష్టమైన ఫోటోను అప్‌లోడ్ చేయండి."
+                    "en": "Not recognized as a plant leaf. Please upload a clear close-up photo of the crop leaf.",
+                    "te": "ఇది పంట ఆకు కాదు. దయచేసి పంట ఆకుకు సంబంధించిన స్పష్టమైన ఫోటోను అప్‌లోడ్ చేయండి."
                 },
                 "blurry_image": {
                     "en": "The uploaded photo is too blurry. Please take a sharper picture in daylight.",
@@ -69,6 +73,17 @@ class DiseaseDetectionService:
 
         class_idx = pred_result["class_index"]
         confidence = pred_result["confidence"]
+
+        # Reject if model confidence is below 60% (random non-leaf photo)
+        if confidence < 60.0:
+            return {
+                "status": "invalid_image",
+                "reason_code": "low_confidence",
+                "message": "Could not identify crop leaf clearly. Please capture a close-up photo of the leaf.",
+                "message_te": "పంట ఆకు స్పష్టంగా గుర్తించబడలేదు. దయచేసి ఆకును కెమెరాకు దగ్గరగా ఉంచి స్పష్టమైన ఫోటో తీయండి.",
+                "debug": {"confidence": confidence}
+            }
+
         disease_key = DISEASE_CLASS_NAMES[class_idx]
         info = get_disease_info(disease_key)
 

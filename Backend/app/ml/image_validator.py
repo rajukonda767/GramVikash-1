@@ -6,10 +6,11 @@ from typing import Tuple, Dict, Any
 
 class ImageValidator:
     """
-    Production-grade validation pipeline for uploaded crop leaf images:
+    Production-grade validation pipeline for crop leaf images:
     1. File format and dimension verification
-    2. Image quality / corruption / blur verification
-    3. Foliage & leaf texture / color analysis (vegetation detection)
+    2. Image blur / sharpness verification
+    3. Human face / skin / selfie detector (rejects selfies immediately)
+    4. Chlorophyll & plant foliage vegetation analysis
     Rejects selfies, vehicles, animals, documents, or random non-plant objects.
     """
 
@@ -29,7 +30,6 @@ class ImageValidator:
         try:
             image = Image.open(io.BytesIO(image_bytes))
             image.verify()
-            # Reopen after verify
             image = Image.open(io.BytesIO(image_bytes))
         except Exception:
             return False, "corrupt_image", {}
@@ -45,45 +45,54 @@ class ImageValidator:
         # Convert to RGB numpy array for image analysis
         rgb_image = image.convert("RGB")
         img_arr = np.array(rgb_image, dtype=np.float32)
+        total_pixels = float(width * height)
 
-        # 1. Blur / Sharpness check using Laplacian variance approximation
-        gray = 0.2989 * img_arr[:, :, 0] + 0.5870 * img_arr[:, :, 1] + 0.1140 * img_arr[:, :, 2]
-        # Quick discrete Laplacian
+        r = img_arr[:, :, 0]
+        g = img_arr[:, :, 1]
+        b = img_arr[:, :, 2]
+
+        # 1. Human Face / Skin / Selfie Detection
+        # Standard YCbCr / RGB skin tone color range: R > 95, G > 40, B > 20, R > G > B, (R - G) > 15
+        skin_pixels = np.sum((r > 95) & (g > 40) & (b > 20) & (r > g) & (g > b) & ((r - g) > 12) & ((r - b) > 20))
+        skin_ratio = float(skin_pixels) / total_pixels
+
+        if skin_ratio > 0.08:  # More than 8% human skin pixels -> Selfie or person photo
+            return False, "selfie_detected", {
+                "skin_ratio": round(skin_ratio, 3),
+                "message": "Human selfie detected instead of plant leaf."
+            }
+
+        # 2. Blur / Sharpness check using Laplacian variance approximation
+        gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
         laplacian = (
             np.roll(gray, 1, axis=0) + np.roll(gray, -1, axis=0) +
             np.roll(gray, 1, axis=1) + np.roll(gray, -1, axis=1) - 4 * gray
         )
         variance = float(np.var(laplacian[1:-1, 1:-1]))
-        if variance < 2.0:  # Extremely blurry or completely flat uniform color
+        if variance < 2.0:
             return False, "blurry_image", {"variance": variance}
 
-        # 2. Foliage / Plant color analysis
-        # Plant leaves have dominant green, yellow-brown (chlorosis/necrosis) spectrum
-        r = img_arr[:, :, 0]
-        g = img_arr[:, :, 1]
-        b = img_arr[:, :, 2]
-
-        # Normalized Difference Vegetation Index (NDVI) simulation in RGB (Excess Green Index = 2G - R - B)
-        exg = 2.0 * g - r - b
-        green_leaf_pixels = np.sum(exg > 10.0)
+        # 3. Chlorophyll & Plant Foliage Vegetation Analysis
+        # Excess Green Index (ExG = 2G - R - B)
+        green_leaf_pixels = np.sum((2.0 * g - r - b) > 12.0)
         
-        # Yellow/Brown necrosis pixels (R > 80, G > 60, B < G, R >= G)
-        brown_disease_pixels = np.sum((r > 70) & (g > 50) & (b < g) & (r >= g - 20))
+        # Chlorosis / yellow leaf / diseased brown foliage (G >= 60, R >= 60, B <= G, G >= B + 10)
+        diseased_leaf_pixels = np.sum((g >= 60) & (r >= 60) & (b <= g) & (g >= b + 10))
         
-        total_pixels = width * height
-        foliage_ratio = (green_leaf_pixels + brown_disease_pixels) / float(total_pixels)
+        plant_pixel_ratio = (green_leaf_pixels + diseased_leaf_pixels) / total_pixels
 
-        # Non-plant images (e.g. human face, concrete wall, blue car, laptop screenshot) typically have foliage_ratio < 0.08
-        if foliage_ratio < 0.08:
+        # Non-plant images (e.g. wall, car, clothes, room) have plant_pixel_ratio < 0.15
+        if plant_pixel_ratio < 0.15:
             return False, "not_a_plant", {
-                "foliage_ratio": round(foliage_ratio, 3),
+                "plant_ratio": round(plant_pixel_ratio, 3),
                 "green_pixels": int(green_leaf_pixels),
-                "brown_pixels": int(brown_disease_pixels)
+                "diseased_pixels": int(diseased_leaf_pixels)
             }
 
         return True, "valid", {
             "width": width,
             "height": height,
             "variance": round(variance, 1),
-            "foliage_ratio": round(foliage_ratio, 3)
+            "plant_ratio": round(plant_pixel_ratio, 3),
+            "skin_ratio": round(skin_ratio, 3)
         }

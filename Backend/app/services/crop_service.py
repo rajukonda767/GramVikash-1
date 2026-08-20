@@ -298,4 +298,5 @@ class CropRecommendationService:
             "speech_language": "te-IN" if language == "te" else "hi-IN" if language == "hi" else "en-IN"
         }
 
-crop_recommendation_service = CropRecommendationService()
+crop_service = CropRecommendationService()
+crop_recommendation_service = crop_service
