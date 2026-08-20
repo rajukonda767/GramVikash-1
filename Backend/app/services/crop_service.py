@@ -20,7 +20,7 @@ CROP_TRANSLATIONS = {
     "mungbean": {"en": "Green Gram (Moong)", "te": "పెసలు", "hi": "मूंग दाल", "growing_days": 70, "price_per_q": 8400, "base_yield": 0.75},
     "lentil": {"en": "Lentil (Masoor)", "te": "ఎర్ర కందిపప్పు", "hi": "मसूर दाल", "growing_days": 110, "price_per_q": 6200, "base_yield": 0.85},
     "pomegranate": {"en": "Pomegranate", "te": "దానిమ్మ", "hi": "अनार", "growing_days": 365, "price_per_q": 12000, "base_yield": 6.0},
-    "banana": {"en": "Banana", "te": "అరటి", "hi": "केला", "growing_days": 330, "price_per_q": 1800, "base_yield": 22.0},
+    "banana": {"en": "Banana", "te": "అరటి", "hi": "కేలా", "growing_days": 330, "price_per_q": 1800, "base_yield": 22.0},
     "mango": {"en": "Mango", "te": "మామిడి", "hi": "आम", "growing_days": 365, "price_per_q": 4500, "base_yield": 8.0},
     "grapes": {"en": "Grapes", "te": "ద్రాక్ష", "hi": "अंगूर", "growing_days": 150, "price_per_q": 6000, "base_yield": 10.0},
     "watermelon": {"en": "Watermelon", "te": "పుచ్చకాయ", "hi": "तरबूज", "growing_days": 90, "price_per_q": 1200, "base_yield": 18.0},
@@ -33,6 +33,9 @@ CROP_TRANSLATIONS = {
     "coffee": {"en": "Coffee", "te": "కాఫీ", "hi": "कॉफी", "growing_days": 365, "price_per_q": 24000, "base_yield": 1.2},
     "kidneybeans": {"en": "Kidney Beans (Rajma)", "te": "రాజ్మా", "hi": "राजमा", "growing_days": 110, "price_per_q": 9000, "base_yield": 1.0},
 }
+
+# Non-plains crops that should not be recommended for Andhra Pradesh / Telangana plains farms
+NON_PLAINS_CROPS = {"coffee", "apple"}
 
 class CropRecommendationService:
     @staticmethod
@@ -72,10 +75,10 @@ class CropRecommendationService:
             base_k -= 15.0
             base_ph = 6.0
 
-        # 2. Previous Crop Legacy (Legumes fix Nitrogen, Paddy depletes NPK)
+        # 2. Previous Crop Legacy
         pc = previous_crop.lower()
         if any(legume in pc for legume in ["pulse", "gram", "moong", "urad", "శనగ", "మినుము", "పెసర"]):
-            base_n += 25.0  # Nitrogen fixation benefit
+            base_n += 25.0
         elif any(heavy in pc for heavy in ["paddy", "rice", "sugarcane", "cotton", "వరి", "చెరకు"]):
             base_n -= 15.0
             base_p -= 10.0
@@ -98,6 +101,31 @@ class CropRecommendationService:
         }
 
     @staticmethod
+    def calculate_agronomic_rainfall(n: float, p: float, k: float, ph: float) -> float:
+        """
+        Calculates dynamic agro-climatic rainfall index based on soil nutrient profile:
+        - High N + balanced P/K (Delta wetland) -> 220 mm (Paddy / Jute)
+        - High N + low K (Black soil tract) -> 80 mm (Cotton)
+        - Balanced N (60-80) + low K -> 90 mm (Maize)
+        - High K / P (Pulses / Legumes) -> 75 mm (Chickpea / Lentil)
+        - High P + High K -> 110 mm (Banana)
+        """
+        if n >= 70 and p >= 35 and k >= 35 and 5.5 <= ph <= 7.2:
+            return 220.0  # Paddy / Rice optimal rainfall
+        elif n >= 90 and k <= 30:
+            return 80.0   # Cotton optimal rainfall
+        elif 60 <= n <= 85 and k <= 30:
+            return 90.0   # Maize optimal rainfall
+        elif k >= 60 or (n <= 50 and p >= 45):
+            return 75.0   # Chickpea / Pulses optimal rainfall
+        elif p >= 65 and k >= 45:
+            return 110.0  # Banana optimal rainfall
+        elif n >= 75 and p >= 35:
+            return 180.0  # Jute optimal rainfall
+        else:
+            return 95.0   # Standard agricultural rainfall
+
+    @staticmethod
     async def recommend_crops(
         n: Optional[float] = None,
         p: Optional[float] = None,
@@ -118,9 +146,10 @@ class CropRecommendationService:
         Full Crop Recommendation Pipeline:
         1. Check input completeness or run Agricultural inference
         2. Retrieve live weather context
-        3. Execute ML model prediction
-        4. Generate Groq explanation
-        5. Persist recommendation in Supabase
+        3. Dynamically align rainfall & climate factors
+        4. Execute ML model prediction
+        5. Filter regional crops for Andhra Pradesh
+        6. Generate Groq explanation
         """
         source = "farmer_input"
 
@@ -152,8 +181,12 @@ class CropRecommendationService:
             temperature = float(live_weather.get("temperature", 28.0)) if live_weather else 28.0
         if humidity is None:
             humidity = float(live_weather.get("humidity", 65.0)) if live_weather else 65.0
-        if rainfall is None:
-            rainfall = 140.0  # Regional average annual baseline (mm)
+        
+        # Dynamic agro-climatic rainfall alignment based on soil profile
+        if rainfall is None or rainfall == 140.0:
+            rainfall = CropRecommendationService.calculate_agronomic_rainfall(
+                float(n), float(p), float(k), float(ph)
+            )
 
         # Execute ML model inference
         ml_result = model_manager.predict_crop(
@@ -166,7 +199,21 @@ class CropRecommendationService:
             rainfall=float(rainfall)
         )
 
-        top_candidates = ml_result["candidates"][:3]
+        all_candidates = ml_result.get("candidates", [])
+        
+        # Filter out non-plains hill crops like coffee/apple unless in high-altitude zones
+        is_hill_zone = "araku" in location_name.lower() or "hill" in location_name.lower()
+        if not is_hill_zone:
+            filtered_candidates = [
+                c for c in all_candidates if c["crop"].lower() not in NON_PLAINS_CROPS
+            ]
+        else:
+            filtered_candidates = all_candidates
+
+        if not filtered_candidates:
+            filtered_candidates = all_candidates
+
+        top_candidates = filtered_candidates[:3]
         enriched_recommendations = []
 
         for rank, candidate in enumerate(top_candidates, start=1):
@@ -209,30 +256,28 @@ class CropRecommendationService:
             language=language
         )
 
-        # Spoken summary for TTS
+        top_crop = enriched_recommendations[0]
+        profit_formatted = f"{top_crop['estimated_profit_per_acre']:,}"
         spoken_summary = {
-            "te": f"మీ నేల విశ్లేషణ ప్రకారం, టాప్ సిఫార్సు పంట {enriched_recommendations[0]['name_te']} ({enriched_recommendations[0]['suitability_percent']}% అనుకూలత). ఆశించిన దిగుబడి ఎకరానికి {enriched_recommendations[0]['expected_yield_tonnes_per_acre']} టన్నులు. అంచనా నికర లాభం సుమారు ₹{enriched_recommendations[0]['estimated_profit_per_acre']:,}.",
-            "hi": f"आपकी मिट्टी की जांच के अनुसार, शीर्ष अनुशंसित फसल {enriched_recommendations[0]['name_hi']} है ({enriched_recommendations[0]['suitability_percent']}% उपयुक्तता)।",
-            "en": f"Based on your soil nutrients, the top recommended crop is {enriched_recommendations[0]['name_en']} with {enriched_recommendations[0]['suitability_percent']}% suitability."
+            "te": f"మీ నేల మరియు వాతావరణానికి అత్యంత అనుకూలమైన పంట {top_crop['name_te']}. అనుకూలత {top_crop['suitability_percent']} శాతం. ఆశించిన దిగుబడి ఎకరానికి {top_crop['expected_yield_tonnes_per_acre']} టన్నులు మరియు అంచనా లాభం ఎకరానికి {profit_formatted} రూపాయలు.",
+            "hi": f"आपकी मिट्टी के लिए सबसे उपयुक्त फसल {top_crop['name_hi']} है। उपयुक्तता {top_crop['suitability_percent']}% है।",
+            "en": f"Based on your soil and climate, the top recommended crop is {top_crop['name_en']} with {top_crop['suitability_percent']}% suitability."
         }
 
-        # Persist to Supabase if authenticated — keep only 1 record per farmer
+        # Persist to Supabase if authenticated
         supabase = get_supabase_admin()
         if supabase and user_id:
             try:
-                # Delete previous recommendations for this user (limit to 1 per farmer)
-                supabase.table("crop_recommendations").delete().eq("user_id", user_id).execute()
-                # Insert the new recommendation
                 supabase.table("crop_recommendations").insert({
                     "user_id": user_id,
                     "farm_id": farm_id,
+                    "top_crop": top_crop["name_en"],
+                    "suitability_score": top_crop["confidence"],
+                    "soil_inputs": {"n": n, "p": p, "k": k, "ph": ph},
+                    "weather_context": {"temperature": temperature, "humidity": humidity, "rainfall": rainfall},
                     "recommendations": enriched_recommendations,
-                    "input_snapshot": {"n": n, "p": p, "k": k, "ph": ph, "temp": temperature, "humidity": humidity, "rainfall": rainfall, "source": source},
-                    "reasoning": str(explanation),
-                    "location": location_name,
-                    "weather_context": live_weather if live_weather else {}
+                    "explanation": explanation
                 }).execute()
-                logger.info(f"Saved crop recommendation for user_id={user_id}")
             except Exception as e:
                 logger.error(f"Failed to persist crop recommendation: {e}")
 
@@ -240,6 +285,12 @@ class CropRecommendationService:
             "status": "success",
             "source": source,
             "soil_inputs": {"nitrogen": n, "phosphorus": p, "potassium": k, "ph": ph},
+            "weather_context": {
+                "temperature": temperature,
+                "humidity": humidity,
+                "rainfall": rainfall,
+                "location": location_name
+            },
             "recommendations": enriched_recommendations,
             "explanation": explanation,
             "spoken_summary": spoken_summary,
@@ -247,4 +298,4 @@ class CropRecommendationService:
             "speech_language": "te-IN" if language == "te" else "hi-IN" if language == "hi" else "en-IN"
         }
 
-crop_service = CropRecommendationService()
+crop_recommendation_service = CropRecommendationService()
