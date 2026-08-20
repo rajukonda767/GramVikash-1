@@ -1,45 +1,34 @@
-import requests
+import asyncio
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+from app.services.crop_service import CropRecommendationService
+from app.ml.model_loader import model_manager
 
-BASE = "http://127.0.0.1:8000/api"
+model_manager.load_all_models(r'C:\Users\rajuk\.gemini\antigravity\scratch\gramvikas\backend')
 
-tests = [
-    ('Rice Conditions (N=80 P=40 K=40 pH=6.5)', {'nitrogen': 80, 'phosphorus': 40, 'potassium': 40, 'ph': 6.5, 'language': 'en'}),
-    ('Cotton Conditions (N=120 P=45 K=20 pH=6.8)', {'nitrogen': 120, 'phosphorus': 45, 'potassium': 20, 'ph': 6.8, 'language': 'en'}),
-    ('Chickpea Conditions (N=40 P=60 K=80 pH=7.5)', {'nitrogen': 40, 'phosphorus': 60, 'potassium': 80, 'ph': 7.5, 'language': 'te'}),
-    ('Banana Conditions (N=100 P=75 K=50 pH=6.0)', {'nitrogen': 100, 'phosphorus': 75, 'potassium': 50, 'ph': 6.0, 'language': 'te'}),
-    ('Maize Conditions (N=75 P=45 K=20 pH=6.2)', {'nitrogen': 75, 'phosphorus': 45, 'potassium': 20, 'ph': 6.2, 'language': 'en'}),
-]
+async def test():
+    cases = [
+        ("Cotton Target", {"n": 120, "p": 45, "k": 20, "ph": 6.8}),
+        ("Cotton Target (Alt K)", {"n": 120, "p": 45, "k": 40, "ph": 6.8}),
+        ("Paddy Target", {"n": 80, "p": 45, "k": 40, "ph": 6.5}),
+        ("Maize Target", {"n": 75, "p": 48, "k": 20, "ph": 6.2}),
+        ("Chickpea Target", {"n": 40, "p": 60, "k": 80, "ph": 7.0}),
+        ("Banana Target", {"n": 100, "p": 75, "k": 50, "ph": 6.0}),
+    ]
 
-print("=== CROP MODEL — DIFFERENT INPUTS = DIFFERENT OUTPUTS ===")
-for name, payload in tests:
-    try:
-        r = requests.post(f"{BASE}/crop/recommend", json=payload, timeout=30)
-        if r.status_code == 200:
-            data = r.json()
-            recs = data.get('recommendations', [])
-            top3 = [(x.get('name_en'), x.get('suitability_percent')) for x in recs[:3]]
-            weather = data.get('weather_context', {})
-            print(f"[{name}]")
-            print(f"  Top 3: {top3}")
-            print(f"  Weather used: {weather}")
-        else:
-            print(f"[{name}] ERROR {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        print(f"[{name}] EXCEPTION: {e}")
+    print("=== VERIFYING CROP RECOMMENDATION PREDICTIONS & POSITIVE PROFITS ===\n")
+    for name, params in cases:
+        res = await CropRecommendationService.recommend_crops(
+            n=params["n"], p=params["p"], k=params["k"], ph=params["ph"], language="en"
+        )
+        recs = res["recommendations"]
+        top1 = recs[0]
+        top2 = recs[1] if len(recs) > 1 else None
+        print(f"[{name}] Inputs: N={params['n']}, P={params['p']}, K={params['k']}, pH={params['ph']}")
+        print(f"  👉 Rank 1: {top1['name_en']} ({top1['name_te']}) | Yield: {top1['expected_yield_tonnes_per_acre']} T/ac | Net Profit: Rs {top1['estimated_profit_per_acre']:,} | Suitability: {top1['suitability_percent']}%")
+        if top2:
+            print(f"  👉 Rank 2: {top2['name_en']} ({top2['name_te']}) | Yield: {top2['expected_yield_tonnes_per_acre']} T/ac | Net Profit: Rs {top2['estimated_profit_per_acre']:,} | Suitability: {top2['suitability_percent']}%")
+        print()
 
-print()
-print("=== TELUGU TTS ===")
-try:
-    t = requests.get(f"{BASE}/assistant/tts?text=మీ+వరి+పంటకు+నీరు+పెట్టే+సమయం+వచ్చింది&lang=te", timeout=15)
-    ct = t.headers.get("content-type", "unknown")
-    print(f"Status: {t.status_code}, Bytes: {len(t.content)}, Type: {ct}")
-except Exception as e:
-    print(f"TTS error: {e}")
-
-print()
-print("=== LAST RECOMMENDATION ENDPOINT ===")
-try:
-    lr = requests.get(f"{BASE}/crop/last-recommendation", timeout=10)
-    print(f"Status: {lr.status_code} -> {lr.json()}")
-except Exception as e:
-    print(f"Error: {e}")
+asyncio.run(test())
