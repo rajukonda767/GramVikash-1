@@ -1,6 +1,5 @@
 // src/services/voiceService.js
-// Universal Voice Service for GramVikas:
-// High-Fidelity Audio Streaming TTS (Telugu, Hindi, English) + Web Speech API STT (Voice Input)
+// High-Fidelity Audio Streaming TTS + Web Speech API Voice Recognition (STT)
 
 import { API_BASE_URL } from './api';
 
@@ -11,18 +10,6 @@ class VoiceService {
     this.recognition = null;
     this.isListening = false;
     this.isPlayingAudio = false;
-
-    this.initRecognition();
-  }
-
-  initRecognition() {
-    if (typeof window === 'undefined') return;
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = false;
-      this.recognition.interimResults = false;
-    }
   }
 
   getLanguageCode(lang = 'en') {
@@ -35,13 +22,12 @@ class VoiceService {
 
   /**
    * High-fidelity TTS: Streams full sentences in native Telugu, Hindi, or English.
-   * Guarantees that Telugu words are NEVER skipped or reduced to numbers only.
    */
   speak(text, lang = 'en', onEnd = null) {
     if (!text) return;
     this.stopSpeaking();
 
-    // Clean formatting characters
+    // Clean markdown characters
     const cleanText = text
       .replace(/[*_#`~[\]]/g, '')
       .replace(/₹/g, 'రూపాయలు ')
@@ -50,7 +36,6 @@ class VoiceService {
 
     if (!cleanText) return;
 
-    // Use backend streaming TTS endpoint
     try {
       const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
       const ttsUrl = `${baseUrl}/assistant/tts?text=${encodeURIComponent(cleanText)}&lang=${lang}`;
@@ -114,78 +99,101 @@ class VoiceService {
     return this.isPlayingAudio || (this.synth ? this.synth.speaking : false);
   }
 
-  // Listen to user voice input via Web Speech API
-  listen({ lang = 'en', onResult, onError, onStart, onEnd }) {
-    if (!this.recognition) {
-      this.initRecognition();
-    }
-    if (!this.recognition) {
-      if (onError) onError('Speech recognition is not supported on this browser.');
+  /**
+   * Universal Speech Recognition with Explicit Mic Permission and Live Interim Text
+   */
+  async listen({ lang = 'en', onResult, onInterim, onError, onStart, onEnd }) {
+    if (typeof window === 'undefined') return;
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      if (onError) onError('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
       return;
     }
 
-    this.recognition.lang = this.getLanguageCode(lang);
-
-    this.recognition.onstart = () => {
-      this.isListening = true;
-      if (onStart) onStart();
-    };
-
-    this.recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      if (onResult) onResult(transcript);
-    };
-
-    this.recognition.onerror = (event) => {
-      this.isListening = false;
-      if (onError) onError(event.error);
-    };
-
-    this.recognition.onend = () => {
-      this.isListening = false;
-      if (onEnd) onEnd();
-    };
+    // Explicitly request microphone permission if needed
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Release stream so SpeechRecognition can bind exclusively
+        stream.getTracks().forEach((track) => track.stop());
+      } catch (permErr) {
+        console.warn('Microphone permission denied:', permErr);
+        if (onError) onError('Microphone permission denied. Please allow microphone access in your browser settings.');
+        return;
+      }
+    }
 
     try {
+      if (this.recognition) {
+        try { this.recognition.abort(); } catch (e) {}
+      }
+
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = false;
+      this.recognition.interimResults = true;
+      this.recognition.maxAlternatives = 1;
+      this.recognition.lang = this.getLanguageCode(lang);
+
+      let finalTranscript = '';
+
+      this.recognition.onstart = () => {
+        this.isListening = true;
+        if (onStart) onStart();
+      };
+
+      this.recognition.onresult = (event) => {
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const piece = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += piece;
+          } else {
+            interimTranscript += piece;
+          }
+        }
+
+        const currentText = finalTranscript || interimTranscript;
+        if (onInterim && currentText) {
+          onInterim(currentText);
+        }
+
+        if (finalTranscript && onResult) {
+          onResult(finalTranscript.trim());
+        }
+      };
+
+      this.recognition.onerror = (event) => {
+        this.isListening = false;
+        console.warn('Speech recognition error event:', event.error);
+        if (event.error === 'no-speech') {
+          if (onError) onError(lang === 'te' ? 'మాటలు వినబడలేదు. దయచేసి మైక్ దగ్గర మాట్లాడండి.' : 'No speech detected. Please speak clearly into the microphone.');
+        } else if (event.error === 'not-allowed') {
+          if (onError) onError(lang === 'te' ? 'మైక్రోఫోన్ అనుమతి నిరాకరించబడింది.' : 'Microphone access denied. Please allow mic permissions.');
+        } else {
+          if (onError) onError(event.error);
+        }
+      };
+
+      this.recognition.onend = () => {
+        this.isListening = false;
+        if (onEnd) onEnd(finalTranscript.trim());
+      };
+
       this.recognition.start();
     } catch (e) {
-      console.warn('Recognition already active:', e);
+      console.warn('Recognition start exception:', e);
+      if (onError) onError(e.message);
     }
   }
 
   stopListening() {
     if (this.recognition && this.isListening) {
-      this.recognition.stop();
+      try {
+        this.recognition.stop();
+      } catch (e) {}
       this.isListening = false;
     }
-  }
-
-  // Helper to parse spoken numbers & parameters
-  parseSoilValuesFromSpeech(transcript) {
-    const text = transcript.toLowerCase();
-    const values = {};
-
-    const nMatch = text.match(/(?:n|nitrogen|నత్రజని|नाइट्रोजन)\s*(?:is|=|:)?\s*(\d+(\.\d+)?)/i);
-    if (nMatch) values.nitrogen = parseFloat(nMatch[1]);
-
-    const pMatch = text.match(/(?:p|phosphorus|భాస్వరం|फास्फोरस)\s*(?:is|=|:)?\s*(\d+(\.\d+)?)/i);
-    if (pMatch) values.phosphorus = parseFloat(pMatch[1]);
-
-    const kMatch = text.match(/(?:k|potassium|పొటాషియం|पोटेशियम)\s*(?:is|=|:)?\s*(\d+(\.\d+)?)/i);
-    if (kMatch) values.potassium = parseFloat(kMatch[1]);
-
-    const phMatch = text.match(/(?:ph|పిహెచ్|पीएच)\s*(?:is|=|:)?\s*(\d+(\.\d+)?)/i);
-    if (phMatch) values.ph = parseFloat(phMatch[1]);
-
-    const numbers = text.match(/\b\d+(\.\d+)?\b/g);
-    if (numbers && numbers.length >= 3 && Object.keys(values).length === 0) {
-      values.nitrogen = parseFloat(numbers[0]);
-      values.phosphorus = parseFloat(numbers[1]);
-      values.potassium = parseFloat(numbers[2]);
-      if (numbers.length >= 4) values.ph = parseFloat(numbers[3]);
-    }
-
-    return values;
   }
 }
 

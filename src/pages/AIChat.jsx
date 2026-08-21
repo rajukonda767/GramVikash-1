@@ -135,16 +135,23 @@ export default function AIChat() {
 
     voiceService.listen({
       lang: currentLang,
+      onInterim: (liveText) => {
+        setInputText(liveText);
+      },
       onResult: (transcript) => {
         setIsListening(false);
         setInputText(transcript);
         handleSend(transcript);
       },
-      onError: () => {
+      onError: (err) => {
         setIsListening(false);
+        console.warn('AIChat voice error:', err);
       },
-      onEnd: () => {
+      onEnd: (finalText) => {
         setIsListening(false);
+        if (finalText && !loading) {
+          handleSend(finalText);
+        }
       },
     });
   };
