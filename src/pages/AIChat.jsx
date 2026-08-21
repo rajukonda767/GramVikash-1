@@ -123,37 +123,37 @@ export default function AIChat() {
     }
   };
 
-  const handleVoiceRecord = () => {
+  const handleVoiceRecord = async () => {
     if (isListening) {
-      voiceService.stopListening();
       setIsListening(false);
+      setLoading(true);
+      const transcribed = await voiceService.stopRecordingAndTranscribe(currentLang);
+      setLoading(false);
+      if (transcribed && transcribed.trim().length > 0) {
+        setInputText(transcribed.trim());
+        handleSend(transcribed.trim());
+      }
       return;
     }
 
     stopSpeaking();
-    setIsListening(true);
-
-    voiceService.listen({
+    const started = await voiceService.startRecording({
       lang: currentLang,
       onInterim: (liveText) => {
         setInputText(liveText);
-      },
-      onResult: (transcript) => {
-        setIsListening(false);
-        setInputText(transcript);
-        handleSend(transcript);
       },
       onError: (err) => {
         setIsListening(false);
         console.warn('AIChat voice error:', err);
       },
-      onEnd: (finalText) => {
-        setIsListening(false);
-        if (finalText && !loading) {
-          handleSend(finalText);
-        }
+      onStart: () => {
+        setIsListening(true);
       },
     });
+
+    if (started) {
+      setIsListening(true);
+    }
   };
 
   return (

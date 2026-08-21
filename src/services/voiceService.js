@@ -1,5 +1,5 @@
 // src/services/voiceService.js
-// Universal Voice Service: Groq Whisper STT + Audio Streaming TTS + Web Speech Hybrid
+// Production-Grade Voice Service: MediaRecorder Audio Capture + Groq Whisper STT + Streaming TTS
 
 import { API_BASE_URL } from './api';
 import apiClient from './api';
@@ -8,10 +8,11 @@ class VoiceService {
   constructor() {
     this.synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
     this.currentAudio = null;
-    this.recognition = null;
+    this.mediaStream = null;
     this.mediaRecorder = null;
     this.audioChunks = [];
-    this.isListening = false;
+    this.recognition = null;
+    this.isRecording = false;
     this.isPlayingAudio = false;
   }
 
@@ -103,113 +104,171 @@ class VoiceService {
   }
 
   /**
-   * Dual Speech-to-Text Pipeline:
-   * 1. Records live audio via MediaRecorder -> Transcribes via Groq Whisper API (100% accurate on Telugu/English)
-   * 2. Runs WebSpeech API simultaneously for instant live visual feedback
+   * Start Live Audio Recording with MediaRecorder
    */
-  async listen({ lang = 'te', onResult, onInterim, onError, onStart, onEnd }) {
-    if (typeof window === 'undefined') return;
+  async startRecording({ lang = 'te', onInterim = null, onError = null, onStart = null } = {}) {
+    if (typeof window === 'undefined') return false;
 
-    let mediaStream = null;
+    this.stopSpeaking();
+    this.audioChunks = [];
+
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
     } catch (permErr) {
-      console.warn('Microphone permission error:', permErr);
-      if (onError) onError(lang === 'te' ? 'దయచేసి మైక్రోఫోన్ అనుమతి ఇవ్వండి.' : 'Please grant microphone access to speak.');
-      return;
+      console.error('Microphone permission denied:', permErr);
+      if (onError) {
+        onError(
+          lang === 'te'
+            ? 'మైక్రోఫోన్ అనుమతి నిరాకరించబడింది. దయచేసి బ్రౌజర్ సెట్టింగ్స్‌లో మైక్ అనుమతించండి.'
+            : 'Microphone permission denied. Please allow microphone access in your browser settings.'
+        );
+      }
+      return false;
     }
 
-    this.isListening = true;
-    if (onStart) onStart();
-
-    this.audioChunks = [];
     try {
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
-      this.mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
-      
+      // Pick best supported audio container
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
+      }
+
+      this.mediaRecorder = new MediaRecorder(this.mediaStream, { mimeType });
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           this.audioChunks.push(event.data);
         }
       };
 
-      this.mediaRecorder.onstop = async () => {
-        mediaStream.getTracks().forEach((t) => t.stop());
-        const audioBlob = new Blob(this.audioChunks, { type: mimeType });
-        if (audioBlob.size > 500) {
-          try {
-            const formData = new FormData();
-            formData.append('file', audioBlob, `recording_${Date.now()}.${mimeType.includes('webm') ? 'webm' : 'mp4'}`);
-            formData.append('lang', lang);
+      this.mediaRecorder.start(100);
+      this.isRecording = true;
+      if (onStart) onStart();
 
-            const res = await apiClient.post('/assistant/transcribe', formData, {
-              headers: { 'Content-Type': 'multipart/form-data' },
-              timeout: 15000,
-            });
+      // Optional: concurrent WebSpeech for live typing preview (non-blocking)
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        try {
+          this.recognition = new SpeechRecognition();
+          this.recognition.continuous = true;
+          this.recognition.interimResults = true;
+          this.recognition.lang = this.getLanguageCode(lang);
 
-            if (res.data?.text && res.data.text.trim().length > 0) {
-              const whisperText = res.data.text.trim();
-              if (onResult) onResult(whisperText);
-              if (onEnd) onEnd(whisperText);
-              return;
+          this.recognition.onresult = (event) => {
+            let live = '';
+            for (let i = 0; i < event.results.length; ++i) {
+              live += event.results[i][0].transcript;
             }
-          } catch (whisperErr) {
-            console.warn('Whisper transcription fallback to WebSpeech result:', whisperErr);
-          }
+            if (onInterim && live.trim()) {
+              onInterim(live.trim());
+            }
+          };
+
+          this.recognition.onerror = (e) => {
+            // Non-fatal: MediaRecorder continues recording!
+            console.debug('WebSpeech visual note:', e.error);
+          };
+
+          this.recognition.start();
+        } catch (recErr) {
+          console.debug('SpeechRecognition preview note:', recErr);
         }
-        if (onEnd) onEnd();
-      };
-
-      this.mediaRecorder.start(250);
-    } catch (recorderErr) {
-      console.warn('MediaRecorder error:', recorderErr);
-    }
-
-    // Simultaneously run WebSpeech API for real-time live typing animation
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      try {
-        if (this.recognition) {
-          try { this.recognition.abort(); } catch (e) {}
-        }
-
-        this.recognition = new SpeechRecognition();
-        this.recognition.continuous = false;
-        this.recognition.interimResults = true;
-        this.recognition.lang = this.getLanguageCode(lang);
-
-        this.recognition.onresult = (event) => {
-          let text = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            text += event.results[i][0].transcript;
-          }
-          if (onInterim && text) {
-            onInterim(text);
-          }
-        };
-
-        this.recognition.onerror = (e) => {
-          console.warn('WebSpeech note:', e.error);
-        };
-
-        this.recognition.start();
-      } catch (e) {
-        console.warn('WebSpeech recognition note:', e);
       }
+
+      return true;
+    } catch (err) {
+      console.error('Failed to start MediaRecorder:', err);
+      if (onError) onError('Could not initialize audio recording device.');
+      return false;
     }
   }
 
-  stopListening() {
-    this.isListening = false;
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      try {
-        this.mediaRecorder.stop();
-      } catch (e) {}
-    }
+  /**
+   * Stop Recording & Transcribe via Backend Whisper Endpoint
+   */
+  async stopRecordingAndTranscribe(lang = 'te') {
+    this.isRecording = false;
+
+    // Stop WebSpeech preview
     if (this.recognition) {
       try {
         this.recognition.stop();
       } catch (e) {}
+      this.recognition = null;
+    }
+
+    if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+      this.cleanupMediaStream();
+      return '';
+    }
+
+    return new Promise((resolve) => {
+      this.mediaRecorder.onstop = async () => {
+        this.cleanupMediaStream();
+
+        const mimeType = this.mediaRecorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(this.audioChunks, { type: mimeType });
+
+        if (audioBlob.size < 1000) {
+          console.warn('Audio recording is too short/empty.');
+          resolve('');
+          return;
+        }
+
+        try {
+          const extension = mimeType.includes('mp4') ? 'mp4' : (mimeType.includes('ogg') ? 'ogg' : 'webm');
+          const formData = new FormData();
+          formData.append('file', audioBlob, `voice_query_${Date.now()}.${extension}`);
+          formData.append('lang', lang);
+
+          const response = await apiClient.post('/assistant/transcribe', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 20000,
+          });
+
+          const text = response.data?.text || '';
+          resolve(text.trim());
+        } catch (err) {
+          console.error('Whisper transcription error:', err);
+          resolve('');
+        }
+      };
+
+      try {
+        this.mediaRecorder.stop();
+      } catch (e) {
+        this.cleanupMediaStream();
+        resolve('');
+      }
+    });
+  }
+
+  cancelRecording() {
+    this.isRecording = false;
+    if (this.recognition) {
+      try { this.recognition.abort(); } catch (e) {}
+      this.recognition = null;
+    }
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try { this.mediaRecorder.stop(); } catch (e) {}
+    }
+    this.cleanupMediaStream();
+    this.audioChunks = [];
+  }
+
+  cleanupMediaStream() {
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach((track) => track.stop());
+      this.mediaStream = null;
     }
   }
 }
