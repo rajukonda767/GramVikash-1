@@ -357,12 +357,12 @@ class CropRecommendationService:
 
         # Execute ML model inference
         ml_result = model_manager.predict_crop(
-            n=float(n),
-            p=float(p),
-            k=float(k),
+            n=int(n),
+            p=int(p),
+            k=int(k),
             temp=final_temp,
             humidity=final_hum,
-            ph=float(ph),
+            ph=round(float(ph),2),
             rainfall=final_rain
         )
 
