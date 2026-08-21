@@ -29,7 +29,6 @@ import {
 
 import { useFarmer } from '../context/FarmerContext';
 import { useVoice } from '../context/VoiceContext';
-import FormVoiceInput from '../components/voice/FormVoiceInput';
 import SoilReportUploadModal from '../components/common/SoilReportUploadModal';
 import AIExplanationCard from '../components/common/AIExplanationCard';
 import cropService from '../services/cropService';
@@ -91,11 +90,6 @@ export default function CropRecommendation() {
       potassium: extracted.potassium ?? prev.potassium,
       ph: extracted.ph ?? prev.ph,
     }));
-  };
-
-  // Called when Voice Form Input parses spoken values (e.g., "N=82")
-  const handleVoiceValues = (values) => {
-    setFormData((prev) => ({ ...prev, ...values }));
   };
 
   // Validate NPK inputs before sending to model
@@ -278,11 +272,6 @@ export default function CropRecommendation() {
           )}
         </div>
       )}
-
-      {/* ================================================================ */}
-      {/* VOICE FORM INPUT                                                 */}
-      {/* ================================================================ */}
-      <FormVoiceInput onValuesParsed={handleVoiceValues} />
 
       {/* ================================================================ */}
       {/* SOIL NPK FORM                                                    */}

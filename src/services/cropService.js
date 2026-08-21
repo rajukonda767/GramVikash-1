@@ -1,133 +1,53 @@
 // src/services/cropService.js
 import apiClient from './api';
 
-
 /**
- * Smart Soil Report Parser:
- * Analyzes uploaded document (image/PDF) using Groq Vision + OpenCV OCR patterns.
- * Returns NPK values OR validation errors for the farmer.
+ * Real Soil Report Parser via Backend AI OCR Endpoint:
+ * Uploads document (PDF, JPG, PNG, WEBP) or live camera snapshot to backend.
+ * Extracts Nitrogen, Phosphorus, Potassium, and pH values.
  */
-async function parseSoilReportDocument(file, lang = 'en') {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result;
-      const fileName = file.name.toLowerCase();
-      const fileType = file.type.toLowerCase();
+async function parseSoilReportDocument(file, lang = 'te') {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('language', lang);
 
-      // Validate: must be image or PDF, not selfie/screenshot/car photo
-      const isValidDoc = fileType.includes('image') || fileType.includes('pdf');
-      if (!isValidDoc) {
-        resolve({
-          success: false,
-          error: 'invalid_file_type',
-          message: lang === 'te'
-            ? 'దయచేసి సాయిల్ హెల్త్ కార్డు యొక్క ఫోటో లేదా PDF అప్‌లోడ్ చేయండి.'
-            : 'Please upload a Soil Health Card image or PDF.',
-        });
-        return;
-      }
-
-      // For images: check if it looks like a soil report (vs selfie/screenshot)
-      if (fileType.includes('image')) {
-        const img = new Image();
-        img.onload = () => {
-          const isLandscape = img.width > img.height;
-          const isSmall = img.width < 300 || img.height < 200;
-          const isSelfie = img.width === img.height && img.width < 1000;
-
-          if (isSmall) {
-            resolve({
-              success: false,
-              error: 'low_resolution',
-              message: lang === 'te'
-                ? 'చిత్రం చాలా చిన్నగా ఉంది. స్పష్టంగా కనిపించే సాయిల్ హెల్త్ కార్డ్ ఫోటో తీయండి.'
-                : 'Image resolution is too low. Please capture a clear, close-up photo of the Soil Health Card.',
-            });
-            return;
-          }
-
-          // Simulate OCR extraction with realistic soil values
-          // In production this would call a backend OCR endpoint
-          simulateOCR(file, lang, resolve);
-        };
-        img.onerror = () => simulateOCR(file, lang, resolve);
-        img.src = base64;
-      } else {
-        // PDF: directly simulate extraction
-        simulateOCR(file, lang, resolve);
-      }
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function simulateOCR(file, lang, resolve) {
-  // Simulate realistic OCR delay
-  setTimeout(() => {
-    const fname = file.name.toLowerCase();
-
-    // Reject obvious non-document files
-    if (
-      fname.includes('selfie') ||
-      fname.includes('profile') ||
-      fname.includes('photo') ||
-      fname.includes('car') ||
-      fname.includes('screenshot') ||
-      fname.includes('img_00') ||
-      fname.includes('dscf') ||
-      fname.includes('dcim')
-    ) {
-      resolve({
-        success: false,
-        error: 'invalid_document',
-        message: lang === 'te'
-          ? 'ఇది సాయిల్ హెల్త్ కార్డు కాదు. దయచేసి నేల పరీక్ష నివేదిక చిత్రాన్ని అప్‌లోడ్ చేయండి.'
-          : 'This does not appear to be a Soil Health Card. Please upload a clear photo of your official soil test report.',
-      });
-      return;
-    }
-
-    // Realistic extracted values (in production this calls backend OCR endpoint)
-    const extractedValues = {
-      nitrogen: 88,
-      phosphorus: 44,
-      potassium: 52,
-      ph: 6.8,
-      organicCarbon: 0.65,
-      zinc: 1.2,
-    };
-
-    // Check for missing critical fields (simulate detection)
-    const missingFields = [];
-    if (!extractedValues.nitrogen) missingFields.push('Nitrogen (N)');
-    if (!extractedValues.phosphorus) missingFields.push('Phosphorus (P)');
-    if (!extractedValues.potassium) missingFields.push('Potassium (K)');
-    if (!extractedValues.ph) missingFields.push('Soil pH');
-
-    if (missingFields.length > 0) {
-      resolve({
-        success: false,
-        error: 'missing_values',
-        missingFields,
-        message: lang === 'te'
-          ? `నివేదికలో ${missingFields.join(', ')} విలువలు కనుగొనలేదు. దయచేసి ఆ విలువలను మీరే నమోదు చేయండి.`
-          : `Could not detect ${missingFields.join(', ')} from the document. Please enter those values manually below.`,
-      });
-      return;
-    }
-
-    resolve({
-      success: true,
-      confidenceScore: 94,
-      extractedData: extractedValues,
-      labName: 'Regional Soil Testing Laboratory, NTR District, AP',
-      sampleId: `AP-NTR-2026-${Math.floor(Math.random() * 9000 + 1000)}`,
-      voiceNote: lang === 'te'
-        ? `మీ నేల నమూనా విశ్లేషణ పూర్తయింది. నత్రజని ${extractedValues.nitrogen}, భాస్వరం ${extractedValues.phosphorus}, పొటాషియం ${extractedValues.potassium}, నేల pH ${extractedValues.ph} గా నమోదు చేయబడింది.`
-        : `Soil report scanned successfully. Nitrogen ${extractedValues.nitrogen}, Phosphorus ${extractedValues.phosphorus}, Potassium ${extractedValues.potassium}, pH ${extractedValues.ph} extracted.`,
+    const response = await apiClient.post('/crop/extract-soil-report', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 30000,
     });
-  }, 1500);
+
+    const data = response.data;
+    return {
+      success: Boolean(data.success),
+      extractedData: data.extracted_data || {
+        nitrogen: data.nitrogen,
+        phosphorus: data.phosphorus,
+        potassium: data.potassium,
+        ph: data.ph,
+      },
+      missingFields: data.missing_fields || [],
+      missingFieldsTe: data.missing_fields_te || [],
+      confidenceScore: data.confidence_score || 95,
+      labName: data.lab_name,
+      farmerName: data.farmer_name,
+      message: lang === 'te' ? (data.message_te || data.message) : (data.message_en || data.message),
+      voiceNote: data.voice_note,
+      error: data.error,
+    };
+  } catch (error) {
+    console.error('Error calling extract-soil-report API:', error);
+    const errDetail = error.response?.data?.detail || error.message;
+    return {
+      success: false,
+      error: 'api_error',
+      message: lang === 'te'
+        ? 'నివేదిక విశ్లేషణ విఫలమైంది. దయచేసి స్పష్టమైన PDF లేదా ఫోటోను అప్‌లోడ్ చేయండి.'
+        : `Soil report extraction failed: ${errDetail}. Please ensure the image/PDF is clear.`,
+    };
+  }
 }
 
 export const cropService = {
@@ -211,9 +131,9 @@ export const cropService = {
   },
 
   /**
-   * Soil Health Card document parser with validation.
+   * Real Soil Health Card document parser with backend AI OCR endpoint.
    */
-  async parseSoilReport(file, lang = 'en') {
+  async parseSoilReport(file, lang = 'te') {
     return parseSoilReportDocument(file, lang);
   },
 };

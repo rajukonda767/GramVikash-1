@@ -1,8 +1,9 @@
 # backend/app/api/crop_recommendation.py
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Optional
 from app.schemas.requests import CropRecommendRequest
 from app.services.crop_service import crop_service
+from app.services.soil_ocr_service import soil_ocr_service
 from app.core.security import get_current_user
 from app.core.database import get_supabase_admin
 import logging
@@ -39,6 +40,36 @@ async def recommend_crop(req: CropRecommendRequest, current_user: Optional[dict]
     except Exception as e:
         logger.error(f"Crop recommendation API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/extract-soil-report")
+async def extract_soil_report(
+    file: UploadFile = File(...),
+    language: str = Form("te"),
+    current_user: Optional[dict] = Depends(get_current_user)
+):
+    """
+    Real-time Soil Health Card & Test Report Extractor:
+    Accepts PDF, JPG, PNG, WEBP files or live camera captures.
+    Extracts N, P, K, and pH values using multi-layer OCR & AI parsing.
+    Returns missing fields if any parameter cannot be found in the document.
+    """
+    try:
+        file_bytes = await file.read()
+        if len(file_bytes) < 100:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty or too small.")
+
+        result = soil_ocr_service.parse_soil_document(
+            file_bytes=file_bytes,
+            filename=file.filename or "soil_report.jpg",
+            content_type=file.content_type or "",
+            language=language
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Soil report OCR extraction error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to process soil report: {str(e)}")
 
 @router.get("/last-recommendation")
 async def get_last_recommendation(current_user: Optional[dict] = Depends(get_current_user)):
