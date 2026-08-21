@@ -176,6 +176,23 @@ export function FarmerProvider({ children }) {
     return 'CASE_C';
   };
 
+  const refreshWeather = async () => {
+    try {
+      const lat = profile?.location?.latitude || 16.5062;
+      const lon = profile?.location?.longitude || 80.6480;
+      const res = await apiClient.get('/dashboard', {
+        params: { latitude: lat, longitude: lon },
+      });
+      if (res.data?.weather) {
+        setWeather(res.data.weather);
+        return res.data.weather;
+      }
+    } catch (err) {
+      console.warn('FastAPI backend weather refresh:', err);
+    }
+    return null;
+  };
+
   return (
     <FarmerContext.Provider
       value={{
@@ -192,6 +209,7 @@ export function FarmerProvider({ children }) {
         setRecentDiseaseScan,
         clearDiseaseAlert,
         addActivity,
+        refreshWeather,
       }}
     >
       {children}
