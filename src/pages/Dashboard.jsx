@@ -1,7 +1,7 @@
 // src/pages/Dashboard.jsx
-// Farmer-First Dynamic Dashboard adapting to Cases A to E
+// Farmer-First Dynamic Dashboard with Global 2.5-min Auto-Sync, Dynamic Crop Yield & Harvest Estimations
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -19,13 +19,13 @@ import {
   Mic,
   ShieldAlert,
   Volume2,
+  RefreshCw,
 } from 'lucide-react';
 
-import { useFarmer } from '../context/FarmerContext';
+import { useFarmer, calculateCropYield, calculateHarvestDetails } from '../context/FarmerContext';
 import { useVoice } from '../context/VoiceContext';
-import { MOCK_MANDI_PRICES } from '../services/mockData';
+import marketService from '../services/marketService';
 
-// Safe text extractor ensuring no raw object is ever rendered as a React child
 const safeText = (val, lang = 'en', fallback = '') => {
   if (!val) return fallback;
   if (typeof val === 'string' || typeof val === 'number') return String(val);
@@ -35,20 +35,48 @@ const safeText = (val, lang = 'en', fallback = '') => {
   return fallback;
 };
 
+const formatSeconds = (sec) => {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `0${m}:${s < 10 ? `0${s}` : s}`;
+};
+
 export default function Dashboard() {
   const { t, i18n } = useTranslation();
-  const { profile, weather, dashboardState, setIsOnboardingOpen, clearDiseaseAlert } = useFarmer();
+  const {
+    profile,
+    weather,
+    syncCountdown,
+    lastSyncedTime,
+    triggerGlobalSync,
+    dashboardState,
+    setIsOnboardingOpen,
+    clearDiseaseAlert,
+  } = useFarmer();
+
   const { speakText, openVoiceModal } = useVoice();
   const currentLang = i18n.language || 'en';
+  const isTelugu = currentLang === 'te';
 
+  const [mandiPrices, setMandiPrices] = useState([]);
   const activeCrop = profile?.activeCrop;
   const farm = profile?.farm;
-  const isTelugu = currentLang === 'te';
+
+  // Load APMC Mandi rates
+  useEffect(() => {
+    async function loadPrices() {
+      try {
+        const p = await marketService.getMandiPrices();
+        if (p && p.length > 0) setMandiPrices(p);
+      } catch (e) {}
+    }
+    loadPrices();
+  }, []);
 
   // Greeting based on time of day
   const getGreeting = () => {
     const hour = new Date().getHours();
-    if (hour < 12) return isTelugu ? 'శుభోదయం' : currentLang === 'hi' ? 'सुप्रभात' : 'Good Morning';
+    if (hour < 12) return isTelugu ? 'శుభోదయం' : currentLang === 'hi' ? 'సుप्रभात' : 'Good Morning';
     if (hour < 17) return isTelugu ? 'శుభ మధ్యాహ్నం' : currentLang === 'hi' ? 'शुभ दोपहर' : 'Good Afternoon';
     return isTelugu ? 'శుభ సాయంత్రం' : currentLang === 'hi' ? 'शुभ संध्या' : 'Good Evening';
   };
@@ -81,20 +109,13 @@ export default function Dashboard() {
       : `Your ${cropNameDisplay} is healthy and on track. Next watering scheduled in 2 days.`;
   };
 
-  const weatherConditionText = safeText(
-    weather?.condition,
-    currentLang,
-    isTelugu ? 'పాక్షికంగా మేఘావృతం' : 'Partly Cloudy'
-  );
-
-  const rainProbability =
-    weather?.rain_probability ?? weather?.rainProbabilityPercent ?? 20;
+  // Compute Dynamic Yield from active crop and farm area
+  const cropYieldData = calculateCropYield(activeCrop?.cropName, farm?.sizeAcres, profile?.yieldPrediction);
+  const harvestDetails = calculateHarvestDetails(activeCrop?.cropName, activeCrop?.cropAgeDays);
 
   return (
     <div className="space-y-6 animate-fadeIn pb-8">
-      {/* ==================================================================== */}
-      {/* 1. TOP GREETING & WEATHER HERO CARD                                   */}
-      {/* ==================================================================== */}
+      {/* 1. TOP GREETING & WEATHER HERO CARD WITH GLOBAL AUTO-SYNC TIMER */}
       <div className="bg-gradient-to-br from-[#114b27] via-[#166534] to-[#047857] rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="absolute -right-10 -bottom-10 w-64 h-64 bg-emerald-400/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -118,139 +139,111 @@ export default function Dashboard() {
               {getGreeting()}, {safeText(profile?.name, currentLang, 'Raju')} 👋
             </h1>
 
-            <p className="text-sm sm:text-base text-green-100 font-medium leading-relaxed">
+            <p className="text-emerald-100 text-sm font-medium leading-relaxed">
               {getFarmerSummaryText()}
             </p>
 
-            {/* Read Aloud Voice Button */}
-            <div className="pt-2 flex items-center gap-3">
+            <div className="flex items-center gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => speakText(getFarmerSummaryText())}
-                className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs backdrop-blur-md active:scale-95 cursor-pointer"
+                className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-bold px-3.5 py-2 rounded-xl backdrop-blur-md transition-all cursor-pointer shadow-xs active:scale-95"
               >
-                <Volume2 className="w-4 h-4 text-yellow-300" />
+                <Volume2 className="w-3.5 h-3.5 text-yellow-300" />
                 <span>{t('app.speakAloud')}</span>
               </button>
 
               <button
                 type="button"
                 onClick={openVoiceModal}
-                className="flex items-center gap-1.5 text-xs font-bold text-emerald-200 hover:text-white transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-bold px-3.5 py-2 rounded-xl backdrop-blur-md transition-all cursor-pointer shadow-xs active:scale-95"
               >
-                <Mic className="w-3.5 h-3.5 animate-pulse" />
+                <Mic className="w-3.5 h-3.5 text-emerald-300" />
                 <span>{t('dashboard.voiceHelp')}</span>
               </button>
             </div>
           </div>
 
-          {/* Right: Live Weather Widget */}
-          <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 sm:p-5 flex-shrink-0 text-white min-w-[260px]">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-green-200">
-                <MapPin className="w-3.5 h-3.5 text-emerald-300" />
-                <span className="truncate max-w-[150px]">
-                  {safeText(profile?.location?.addressString, currentLang, 'Vijayawada').split(',')[0]}
-                </span>
-              </div>
-              <span className="text-[11px] bg-emerald-400/30 text-emerald-200 font-bold px-2 py-0.5 rounded-md">
-                Live
+          {/* Right: Weather Card with Active Global 2.5-min Countdown */}
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-white/20 flex flex-col justify-between space-y-3 min-w-[280px]">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-emerald-200 flex items-center gap-1.5">
+                <MapPin className="w-4 h-4 text-emerald-300" />
+                {profile?.location?.district || 'Pondugula, Mylavaram'}
               </span>
+              <div className="flex items-center gap-1 text-[11px] font-mono font-bold bg-emerald-900/60 px-2.5 py-1 rounded-full text-yellow-300">
+                <Clock className="w-3 h-3 text-yellow-300" />
+                <span>Sync in {formatSeconds(syncCountdown)}</span>
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-3xl sm:text-4xl font-black">{weather?.temperature ?? 31}°C</div>
-                <p className="text-xs text-green-200 mt-0.5">{weatherConditionText}</p>
-              </div>
-              <div className="text-right text-xs space-y-1 text-green-100">
-                <p className="flex items-center justify-end gap-1">
-                  <Droplets className="w-3.5 h-3.5 text-blue-300" /> {weather?.humidity ?? 72}%
-                </p>
-                <p className="flex items-center justify-end gap-1">
-                  <CloudRain className="w-3.5 h-3.5 text-cyan-300" /> {rainProbability}% Rain
+                <span className="text-3xl sm:text-4xl font-black text-white">
+                  {weather?.temperature ?? 32.7}°C
+                </span>
+                <p className="text-xs text-emerald-200 font-semibold mt-0.5">
+                  {safeText(weather?.condition, currentLang, 'Mainly Clear')}
                 </p>
               </div>
+
+              <div className="text-right space-y-1 text-xs text-emerald-100">
+                <div className="flex items-center justify-end gap-1 font-bold">
+                  <Droplets className="w-3.5 h-3.5 text-blue-300" />
+                  <span>{weather?.humidity ?? 55}% Humidity</span>
+                </div>
+                <div className="flex items-center justify-end gap-1 font-bold">
+                  <CloudRain className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>{weather?.rain_probability ?? 33}% Rain</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 text-[10px] text-emerald-200/80 border-t border-white/10">
+              <span>Auto-refreshes every 2.5 min</span>
+              <button
+                type="button"
+                onClick={triggerGlobalSync}
+                className="text-yellow-300 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="w-2.5 h-2.5" /> Sync now
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ==================================================================== */}
-      {/* 2. DYNAMIC CASE ALERTS (CASE D: DISEASE, CASE E: IRRIGATION DUE)      */}
-      {/* ==================================================================== */}
-      {dashboardState === 'CASE_A' && (
-        <div className="bg-gradient-to-r from-amber-500 to-orange-500 rounded-2xl p-5 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-white flex-shrink-0">
-              <Sparkles className="w-7 h-7 text-yellow-200" />
+      {/* 2. CASE D: DISEASE ALERT BANNER */}
+      {dashboardState === 'CASE_D' && profile?.recentDiseaseScan && (
+        <div className="bg-gradient-to-r from-red-600 to-rose-700 rounded-3xl p-5 sm:p-6 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-shake">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center flex-shrink-0 backdrop-blur-md">
+              <ShieldAlert className="w-6 h-6 text-yellow-300 animate-pulse" />
             </div>
             <div>
-              <h3 className="font-bold text-base">{t('dashboard.newFarmerTitle')}</h3>
-              <p className="text-xs text-amber-100">{t('dashboard.newFarmerSubtitle')}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsOnboardingOpen(true)}
-            className="w-full sm:w-auto bg-white text-orange-700 hover:bg-orange-50 font-bold px-6 py-2.5 rounded-xl text-sm shadow-md transition-all flex-shrink-0 cursor-pointer"
-          >
-            {t('dashboard.setupFarm')}
-          </button>
-        </div>
-      )}
-
-      {dashboardState === 'CASE_B' && (
-        <div className="bg-gradient-to-r from-emerald-600 to-green-600 rounded-2xl p-5 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-white flex-shrink-0">
-              <Wheat className="w-7 h-7 text-yellow-300" />
-            </div>
-            <div>
-              <h3 className="font-bold text-base">{t('dashboard.noCropTitle')}</h3>
-              <p className="text-xs text-green-100">{t('dashboard.noCropSubtitle')}</p>
-            </div>
-          </div>
-          <Link
-            to="/crop-recommendation"
-            className="w-full sm:w-auto bg-white text-green-800 hover:bg-green-50 font-bold px-6 py-2.5 rounded-xl text-sm shadow-md transition-all text-center flex-shrink-0"
-          >
-            {t('dashboard.getRecommendation')}
-          </Link>
-        </div>
-      )}
-
-      {dashboardState === 'CASE_D' && (
-        <div className="bg-gradient-to-r from-red-600 to-rose-600 rounded-2xl p-5 text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4 animate-pulse">
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-white flex-shrink-0">
-              <ShieldAlert className="w-7 h-7 text-yellow-300" />
-            </div>
-            <div>
-              <h3 className="font-bold text-base">
-                {isTelugu
-                  ? `శ్రద్ధ అవసరం: ${profile?.recentDiseaseScan?.diseaseTe || profile?.recentDiseaseScan?.disease || 'పంట తెగులు'} గుర్తించబడింది`
-                  : `Action Needed: ${profile?.recentDiseaseScan?.disease || 'Crop Disease'} Detected`}
+              <span className="text-[11px] font-black tracking-wider uppercase text-red-200 bg-red-900/50 px-2 py-0.5 rounded-full">
+                {isTelugu ? '🚨 అత్యవసర వ్యాధి హెచ్చరిక' : '🚨 Urgent Crop Disease Alert'}
+              </span>
+              <h3 className="text-lg font-black mt-1">
+                {isTelugu ? (profile.recentDiseaseScan.diseaseTe || profile.recentDiseaseScan.disease) : profile.recentDiseaseScan.disease}
               </h3>
               <p className="text-xs text-red-100 mt-0.5">
-                {isTelugu
-                  ? 'సకాలంలో పిచికారీ చేయడం వల్ల పంట నష్టం తగ్గుతుంది. వెంటనే నివారణ మందులు చూడండి.'
-                  : 'Early treatment prevents crop damage. Check the recommended spray remedy immediately.'}
+                {profile.recentDiseaseScan.recommendation || (isTelugu ? 'తక్షణ చికిత్స చర్యలు చేపట్టండి.' : 'Immediate treatment recommended.')}
               </p>
             </div>
           </div>
+
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <Link
               to="/disease-detection"
-              className="flex-1 sm:flex-none bg-white text-red-700 hover:bg-red-50 font-bold px-5 py-2.5 rounded-xl text-xs shadow-md transition-all text-center"
+              className="flex-1 sm:flex-none text-center bg-white text-red-700 font-bold px-4 py-2.5 rounded-xl text-xs shadow-md hover:bg-red-50 transition-colors"
             >
-              {isTelugu ? 'నివారణ చూడండి' : 'View Remedy'}
+              {isTelugu ? 'చికిత్స చూడండి' : 'View Treatment'}
             </Link>
             <button
               type="button"
               onClick={clearDiseaseAlert}
               className="bg-red-800/60 hover:bg-red-800 text-white font-bold px-3.5 py-2.5 rounded-xl text-xs transition-colors border border-red-400/40 cursor-pointer"
-              title="Mark as treated / Dismiss alert"
             >
               {isTelugu ? '✓ తొలగించు' : '✓ Dismiss'}
             </button>
@@ -258,14 +251,12 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ==================================================================== */}
-      {/* 3. 4 KEY FARM STATUS CARDS                                            */}
-      {/* ==================================================================== */}
+      {/* 3. 4 KEY FARM STATUS CARDS (DYNAMICALLY COMPUTED) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Card 1: Active Crop */}
         <div className="bg-white rounded-2xl p-4 sm:p-5 border border-green-100 shadow-xs flex flex-col justify-between hover:border-green-300 transition-colors">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-gray-500 uppercase">{t('dashboard.activeCrops')}</span>
+            <span className="text-xs font-bold text-gray-500 uppercase">{t('dashboard.activeCrop')}</span>
             <div className="w-8 h-8 bg-green-100 text-green-700 rounded-xl flex items-center justify-center">
               <Wheat className="w-4 h-4" />
             </div>
@@ -304,7 +295,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Card 3: Yield Forecast */}
+        {/* Card 3: Dynamic Yield Forecast */}
         <div className="bg-white rounded-2xl p-4 sm:p-5 border border-green-100 shadow-xs flex flex-col justify-between hover:border-green-300 transition-colors">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-gray-500 uppercase">{t('dashboard.yieldForecast')}</span>
@@ -314,10 +305,10 @@ export default function Dashboard() {
           </div>
           <div>
             <p className="text-lg sm:text-xl font-black text-gray-900">
-              {activeCrop?.hasCrop ? '11.9 Tonnes' : '12.0 Tonnes'}
+              {cropYieldData.totalTonnes} Tonnes
             </p>
             <p className="text-[11px] text-amber-600 font-semibold mt-0.5">
-              {isTelugu ? '3.4 టన్నులు / ఎకరా' : '3.4 Tonnes / Acre'}
+              {isTelugu ? `${cropYieldData.yieldPerAcre} టన్నులు / ఎకరా` : `${cropYieldData.yieldPerAcre} Tonnes / Acre`}
             </p>
           </div>
         </div>
@@ -341,11 +332,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ==================================================================== */}
-      {/* 4. CROP GROWTH PROGRESS & IRRIGATION TIMELINE                         */}
-      {/* ==================================================================== */}
+      {/* 4. DYNAMIC CROP GROWTH PROGRESS & LIVE IRRIGATION SCHEDULE */}
       {activeCrop?.hasCrop && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+          {/* Dynamic Crop Progress Bar */}
           <div className="bg-white rounded-3xl p-6 border border-green-100 shadow-xs space-y-4">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <div className="flex items-center gap-2">
@@ -353,50 +343,45 @@ export default function Dashboard() {
                 <h3 className="font-bold text-base text-gray-900">{t('dashboard.cropProgress')}</h3>
               </div>
               <span className="text-xs font-bold bg-green-100 text-green-800 px-3 py-1 rounded-full">
-                {activeCrop.cropAgeDays || 30} {t('common.days')} ({safeText(activeCrop.growthStage, currentLang, 'Vegetative')})
+                Day {activeCrop.cropAgeDays || 1} ({safeText(activeCrop.growthStage, currentLang, 'Vegetative')})
               </span>
             </div>
 
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs font-bold text-gray-600">
                 <span>{isTelugu ? 'విత్తనం (0వ రోజు)' : 'Sowing (Day 0)'}</span>
-                <span>{isTelugu ? 'కోత (135వ రోజు)' : 'Harvest (Day 135)'}</span>
+                <span>{isTelugu ? `కోత (${harvestDetails.totalCycleDays}వ రోజు)` : `Harvest (Day ${harvestDetails.totalCycleDays})`}</span>
               </div>
               <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden p-0.5 border border-gray-200">
                 <div
                   className="bg-gradient-to-r from-emerald-500 to-green-600 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.round(((activeCrop.cropAgeDays || 30) / 135) * 100))}%` }}
+                  style={{ width: `${Math.max(3, harvestDetails.progressPercent)}%` }}
                 />
               </div>
             </div>
 
             <p className="text-xs text-gray-600 font-medium">
               {isTelugu
-                ? '🌾 అంచనా కోత తేదీ: డిసెంబర్ 05, 2026 (~105 రోజులు మిగిలి ఉన్నాయి).'
-                : '🌾 Expected harvest window: Dec 05, 2026 (~105 days remaining).'}
+                ? `🌾 అంచనా కోత సమయం: ${harvestDetails.harvestMonth} (~${harvestDetails.remainingDays} రోజులు మిగిలి ఉన్నాయి).`
+                : `🌾 Expected harvest: ${harvestDetails.harvestMonth} (~${harvestDetails.remainingDays} days remaining).`}
             </p>
           </div>
 
+          {/* Dynamic Smart Irrigation Schedule (2.5-min Auto-Sync) */}
           <div className="bg-white rounded-3xl p-6 border border-green-100 shadow-xs space-y-4">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <div className="flex items-center gap-2">
                 <Droplets className="w-5 h-5 text-blue-600" />
                 <h3 className="font-bold text-base text-gray-900">{t('dashboard.irrigationStatus')}</h3>
               </div>
-              <span className={`text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 ${
-                (weather?.rain_probability > 40)
-                  ? 'bg-cyan-100 text-cyan-800'
-                  : (profile?.irrigationPlan?.soilMoisture && profile.irrigationPlan.soilMoisture < 40)
-                  ? 'bg-amber-100 text-amber-800 animate-pulse'
-                  : 'bg-blue-100 text-blue-800'
-              }`}>
+              <span className="text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 bg-blue-100 text-blue-800">
                 <Clock className="w-3.5 h-3.5" />
                 <span>
                   {profile?.irrigationPlan
                     ? (isTelugu ? (profile.irrigationPlan.wateringWindowTe || profile.irrigationPlan.wateringWindow) : profile.irrigationPlan.wateringWindow)
-                    : (weather?.rain_probability > 40
-                        ? (isTelugu ? 'వర్షం వచ్చే అవకాశం ఉంది' : 'Rain Expected Today')
-                        : (isTelugu ? 'రేపు ఉదయం 6:00 AM' : 'Tomorrow 6:00 AM'))}
+                    : (weather?.temperature >= 32
+                        ? (isTelugu ? 'రేపు ఉదయం 5:30 - 7:30' : 'Tomorrow 5:30 AM - 7:30 AM')
+                        : (isTelugu ? 'రేపు ఉదయం 6:00 - 8:00' : 'Tomorrow 6:00 AM - 8:00 AM'))}
                 </span>
               </span>
             </div>
@@ -405,23 +390,13 @@ export default function Dashboard() {
               <div className="flex justify-between text-xs font-bold text-gray-600">
                 <span>{isTelugu ? 'నేల తేమ శాతం' : 'Soil Moisture'}</span>
                 <span className="text-blue-700 font-black">
-                  {profile?.irrigationPlan?.soilMoisture || 68}% (
-                  {((profile?.irrigationPlan?.soilMoisture || 68) >= 65)
-                    ? (isTelugu ? 'సమృద్ధిగా ఉంది' : 'Adequate')
-                    : ((profile?.irrigationPlan?.soilMoisture || 68) >= 40)
-                    ? (isTelugu ? 'మితంగా ఉంది' : 'Moderate')
-                    : (isTelugu ? 'వెంటనే నీరు అవసరం' : 'Dry - Water Soon')}
-                  )
+                  {profile?.irrigationPlan?.soilMoisture || 55}% ({isTelugu ? 'మితమైన తేమ' : 'Moderate'})
                 </span>
               </div>
               <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden p-0.5 border border-gray-200">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    (profile?.irrigationPlan?.soilMoisture || 68) < 40
-                      ? 'bg-gradient-to-r from-amber-400 to-red-500'
-                      : 'bg-gradient-to-r from-blue-400 to-cyan-500'
-                  }`}
-                  style={{ width: `${Math.min(100, profile?.irrigationPlan?.soilMoisture || 68)}%` }}
+                  className="bg-gradient-to-r from-blue-400 to-cyan-500 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, profile?.irrigationPlan?.soilMoisture || 55)}%` }}
                 />
               </div>
             </div>
@@ -429,17 +404,15 @@ export default function Dashboard() {
             <p className="text-xs text-gray-600 font-medium leading-relaxed">
               {profile?.irrigationPlan?.recommendation || (
                 isTelugu
-                  ? `💧 సిఫార్సు: ${safeText(activeCrop?.cropName, currentLang, 'వరి')} పంటకు వచ్చే 48 గంటల్లో వర్ష సూచనను బట్టి ఉదయం వేళ ${profile?.irrigationPlan?.waterAmountLiters || 20} లీ/చ.మీ నీరు అందించండి.`
-                  : `💧 Recommendation: For ${safeText(activeCrop?.cropName, currentLang, 'Paddy')} in ${safeText(activeCrop?.growthStage, currentLang, 'Vegetative stage')}, apply ${profile?.irrigationPlan?.waterAmountLiters || 20} L/m² in the early morning window.`
+                  ? `మీ పంటలో నేల తేమ 55% గా ఉంది. ప్రస్తుత ఉష్ణోగ్రత (${weather?.temperature || 32}°C) దృష్ట్యా ఉదయం వేళ ${profile?.irrigationPlan?.waterAmountLiters || 20} లీ/చ.మీ నీరు అందించండి.`
+                  : `Soil moisture is at 55%. Based on ${weather?.temperature || 32}°C daytime temperature, apply ${profile?.irrigationPlan?.waterAmountLiters || 20} L/m² in the early morning window.`
               )}
             </p>
           </div>
         </div>
       )}
 
-      {/* ==================================================================== */}
-      {/* 5. QUICK ACTIONS GRID                                                */}
-      {/* ==================================================================== */}
+      {/* 5. QUICK ACTIONS GRID */}
       <div>
         <h2 className="text-lg font-bold text-gray-900 mb-3">{t('dashboard.quickActions')}</h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -490,9 +463,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ==================================================================== */}
-      {/* 6. APMC MANDI RATES OVERVIEW                                         */}
-      {/* ==================================================================== */}
+      {/* 6. APMC MANDI RATES OVERVIEW */}
       <div className="bg-white rounded-3xl p-6 border border-green-100 shadow-xs space-y-4">
         <div className="flex items-center justify-between border-b border-gray-100 pb-3">
           <div className="flex items-center gap-2">
@@ -505,16 +476,22 @@ export default function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {MOCK_MANDI_PRICES.slice(0, 3).map((item, i) => (
+          {(mandiPrices.length > 0 ? mandiPrices.slice(0, 3) : [
+            { crop: 'Paddy (వరి)', market: 'Vijayawada APMC', price_per_quintal: 2320, change_percent: 1.75 },
+            { crop: 'Tomato (టమాటో)', market: 'Madanapalle APMC', price_per_quintal: 3800, change_percent: 11.76 },
+            { crop: 'Cotton (పత్తి)', market: 'Guntur APMC', price_per_quintal: 7450, change_percent: -0.67 },
+          ]).map((item, i) => (
             <div key={i} className="bg-gray-50/70 hover:bg-green-50/50 p-4 rounded-2xl border border-gray-200/70 transition-colors flex items-center justify-between">
               <div>
-                <p className="font-bold text-sm text-gray-900">{isTelugu ? item.cropTe : item.crop}</p>
-                <p className="text-[11px] text-gray-500">{isTelugu ? item.marketTe : item.market}</p>
+                <p className="font-bold text-sm text-gray-900">{isTelugu ? (item.crop_te || item.crop) : (item.crop_en || item.crop)}</p>
+                <p className="text-[11px] text-gray-500">{item.market}</p>
               </div>
               <div className="text-right">
-                <p className="font-black text-base text-emerald-700">₹{item.pricePerQuintal.toLocaleString('en-IN')}</p>
-                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">
-                  +{item.changePercent}% ↑
+                <p className="font-black text-base text-emerald-700">₹{(item.price_per_quintal || item.pricePerQuintal || 2320).toLocaleString('en-IN')}</p>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  (item.change_percent >= 0) ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  {item.change_percent >= 0 ? `+${item.change_percent}% ↑` : `${item.change_percent}% ↓`}
                 </span>
               </div>
             </div>

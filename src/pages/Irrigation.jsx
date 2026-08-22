@@ -28,7 +28,14 @@ const AUTO_SYNC_INTERVAL_SECONDS = 150; // 2.5 minutes
 
 export default function Irrigation() {
   const { t, i18n } = useTranslation();
-  const { profile, weather, updateProfile, refreshWeather } = useFarmer();
+  const {
+    profile,
+    weather,
+    syncCountdown,
+    lastSyncedTime,
+    triggerGlobalSync,
+    updateProfile,
+  } = useFarmer();
   const { speakText, stopSpeaking, isSpeaking } = useVoice();
   const lang = i18n.language || 'en';
 
@@ -43,9 +50,6 @@ export default function Irrigation() {
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [syncCountdown, setSyncCountdown] = useState(AUTO_SYNC_INTERVAL_SECONDS);
-  const [lastSyncedTime, setLastSyncedTime] = useState('');
-  const timerRef = useRef(null);
 
   // Sync formData with latest live weather from context
   useEffect(() => {
@@ -60,35 +64,8 @@ export default function Irrigation() {
 
   // Initial Calculation on Page Mount
   useEffect(() => {
-    calculatePlan();
-  }, []);
-
-  // 2.5-Minute Polling Loop with Live Countdown
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setSyncCountdown((prev) => {
-        if (prev <= 1) {
-          // Trigger Auto-Refresh
-          triggerAutoSync();
-          return AUTO_SYNC_INTERVAL_SECONDS;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [formData.crop, formData.growthStage, formData.soilMoisture]);
-
-  const triggerAutoSync = async () => {
-    if (refreshWeather) {
-      try {
-        await refreshWeather();
-      } catch (e) {}
-    }
-    calculatePlan(true);
-  };
+    calculatePlan(false);
+  }, [formData.crop, formData.growthStage]);
 
   const calculatePlan = async (isAuto = false) => {
     setLoading(true);
@@ -137,9 +114,11 @@ export default function Irrigation() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleManualSync = () => {
-    setSyncCountdown(AUTO_SYNC_INTERVAL_SECONDS);
-    triggerAutoSync();
+  const handleManualSync = async () => {
+    if (triggerGlobalSync) {
+      await triggerGlobalSync();
+    }
+    calculatePlan(false);
   };
 
   const formatSeconds = (sec) => {
